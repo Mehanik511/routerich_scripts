@@ -1,5 +1,5 @@
 #!/bin/sh
-# Ахтунг! Вайбкодинг
+# Ахтунг! Вайбкодинг!
 # Скрипт для удаления, установки и настройки Tailscale
 PACKAGES="tailscale tailscale-lite luci-app-tailscale luci-i18n-tailscale-ru"
 RED='\033[0;31m'
