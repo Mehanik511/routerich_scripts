@@ -104,7 +104,7 @@ configure_network() {
 configure_firewall() {
     printf "${YELLOW}[INFO] Проверяем настройки фаервола...${NC}\n"
     
-    # Настройка сетевого интерфейса
+    # Сначала настраиваем сетевой интерфейс
     configure_network
     
     # Проверка существования зоны фаервола
@@ -144,17 +144,24 @@ configure_firewall() {
     else
         printf "${GREEN}[OK] Настройки фаервола для Tailscale уже существуют${NC}\n"
         
-        # Проверка, что сеть правильно установлена в зоне
-        ZONE_CONFIG=$(uci show firewall | grep "zone.*tailscale" | cut -d'=' -f1 | cut -d'.' -f1-2)
-        if [ -n "$ZONE_CONFIG" ]; then
+        # Безопасное получение конфигурации зоны
+        ZONE_LINE=$(uci show firewall | grep "zone.*tailscale" | head -1)
+        if [ -n "$ZONE_LINE" ]; then
+            ZONE_CONFIG=$(echo "$ZONE_LINE" | cut -d'=' -f1 | cut -d'.' -f1-2)
             ZONE_NETWORK=$(uci get $ZONE_CONFIG.network 2>/dev/null)
+            
             if [ "$ZONE_NETWORK" != "tailscale" ]; then
                 printf "${YELLOW}[INFO] Обновляем настройки зоны tailscale...${NC}\n"
                 uci set $ZONE_CONFIG.network='tailscale'
                 uci commit firewall
+                printf "${GREEN}[OK] Настройки зоны обновлены${NC}\n"
                 /etc/init.d/firewall restart
                 sleep 2
+            else
+                printf "${GREEN}[OK] Зона tailscale уже правильно настроена${NC}\n"
             fi
+        else
+            printf "${YELLOW}[WARNING] Не удалось найти конфигурацию зоны tailscale${NC}\n"
         fi
     fi
 }
@@ -173,9 +180,10 @@ verify_configuration() {
     
     # Проверка конфигурации фаервола
     printf "${CYAN}2. Проверка конфигурации фаервола:${NC}\n"
-    if uci show firewall | grep -q "zone.*tailscale"; then
+    ZONE_LINE=$(uci show firewall | grep "zone.*tailscale" | head -1)
+    if [ -n "$ZONE_LINE" ]; then
         printf "${GREEN}[OK] Зона tailscale в конфигурации фаервола${NC}\n"
-        ZONE_CONFIG=$(uci show firewall | grep "zone.*tailscale" | cut -d'=' -f1 | cut -d'.' -f1-2)
+        ZONE_CONFIG=$(echo "$ZONE_LINE" | cut -d'=' -f1 | cut -d'.' -f1-2)
         uci show $ZONE_CONFIG
     else
         printf "${RED}[ERROR] Зона tailscale отсутствует в конфигурации фаервола${NC}\n"
