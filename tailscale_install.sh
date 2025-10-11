@@ -26,6 +26,33 @@ show_menu() {
     printf "${CYAN}Введите номер действия (1-4): ${NC}"
 }
 
+backup_configs() {
+    local backup_dir="/root/tailscale_backup"
+    
+    printf "${YELLOW}[INFO] Создаем бэкап конфигураций...${NC}\n"
+    
+    # Создаем директорию для бэкапов если её нет
+    mkdir -p "$backup_dir"
+    
+    # Бэкап конфигурационных файлов
+    if [ -f "/etc/config/tailscale" ]; then
+        cp "/etc/config/tailscale" "$backup_dir/" 2>/dev/null
+        printf "${GREEN}[OK] Сохранен: tailscale${NC}\n"
+    fi
+    
+    if [ -f "/etc/config/network" ]; then
+        cp "/etc/config/network" "$backup_dir/" 2>/dev/null
+        printf "${GREEN}[OK] Сохранен: network${NC}\n"
+    fi
+    
+    if [ -f "/etc/config/firewall" ]; then
+        cp "/etc/config/firewall" "$backup_dir/" 2>/dev/null
+        printf "${GREEN}[OK] Сохранен: firewall${NC}\n"
+    fi
+    
+    printf "${GREEN}[OK] Бэкап создан в: $backup_dir${NC}\n"
+}
+
 remove_package() {
     local package=$1
     if opkg list-installed | grep -q "^$package -"; then
@@ -77,6 +104,8 @@ create_tailscale_symlink() {
 }
 
 configure_network() {
+    backup_configs
+    
     printf "${YELLOW}[INFO] Проверяем настройки сети...${NC}\n"
     
     # Проверка существования интерфейса tailscale в конфигурации сети
@@ -102,6 +131,8 @@ configure_network() {
 }
 
 configure_firewall() {
+    backup_configs
+    
     printf "${YELLOW}[INFO] Проверяем настройки фаервола...${NC}\n"
     
     # Сначала настраиваем сетевой интерфейс
@@ -335,6 +366,8 @@ install_tailscale() {
 }
 
 remove_tailscale() {
+    backup_configs
+    
     printf "${YELLOW}[INFO] Начинаем удаление Tailscale...${NC}\n"
     
     # Удаление всех пакетов из списка tailscale*
@@ -372,6 +405,8 @@ remove_tailscale() {
 }
 
 reconfigure_tailscale() {
+    backup_configs
+    
     printf "${YELLOW}[INFO] Начинаем перенастройку Tailscale...${NC}\n"
     
     # Проверка, что Tailscale установлен
@@ -398,6 +433,8 @@ reconfigure_tailscale() {
 }
 
 full_reinstall() {
+    backup_configs
+    
     printf "${YELLOW}[INFO] Начинаем полную переустановку Tailscale...${NC}\n"
     
     # Шаг 1: Удалить существующие пакеты
