@@ -76,8 +76,36 @@ create_tailscale_symlink() {
     fi
 }
 
+configure_network() {
+    printf "${YELLOW}[INFO] Проверяем настройки сети...${NC}\n"
+    
+    # Проверка существования интерфейса tailscale в конфигурации сети
+    if ! uci show network | grep -q "network.tailscale"; then
+        printf "${YELLOW}[INFO] Добавляем интерфейс tailscale в конфигурацию сети...${NC}\n"
+        
+        # Добавление интерфейса tailscale в конфигурацию сети
+        uci set network.tailscale=interface
+        uci set network.tailscale.proto='none'
+        uci set network.tailscale.device='tailscale0'
+        uci set network.tailscale.delegate='0'
+        
+        uci commit network
+        printf "${GREEN}[OK] Интерфейс tailscale добавлен в конфигурацию сети${NC}\n"
+        
+        # Перезагрузка сети для применения изменений
+        printf "${YELLOW}[INFO] Перезагружаем сеть...${NC}\n"
+        /etc/init.d/network reload
+        sleep 3
+    else
+        printf "${GREEN}[OK] Интерфейс tailscale уже есть в конфигурации сети${NC}\n"
+    fi
+}
+
 configure_firewall() {
     printf "${YELLOW}[INFO] Проверяем настройки фаервола...${NC}\n"
+    
+    # Настройка сетевого интерфейса
+    configure_network
     
     # Проверка существования зоны фаервола
     if ! uci show firewall | grep -q "zone.*tailscale"; then
@@ -108,8 +136,58 @@ configure_firewall() {
         
         uci commit firewall
         printf "${GREEN}[OK] Настройки фаервола добавлены${NC}\n"
+        
+        # Перезапуск фаервола для применения изменений
+        printf "${YELLOW}[INFO] Перезапускаем фаервол...${NC}\n"
+        /etc/init.d/firewall restart
+        sleep 2
     else
         printf "${GREEN}[OK] Настройки фаервола для Tailscale уже существуют${NC}\n"
+        
+        # Проверка, что сеть правильно установлена в зоне
+        ZONE_CONFIG=$(uci show firewall | grep "zone.*tailscale" | cut -d'=' -f1 | cut -d'.' -f1-2)
+        if [ -n "$ZONE_CONFIG" ]; then
+            ZONE_NETWORK=$(uci get $ZONE_CONFIG.network 2>/dev/null)
+            if [ "$ZONE_NETWORK" != "tailscale" ]; then
+                printf "${YELLOW}[INFO] Обновляем настройки зоны tailscale...${NC}\n"
+                uci set $ZONE_CONFIG.network='tailscale'
+                uci commit firewall
+                /etc/init.d/firewall restart
+                sleep 2
+            fi
+        fi
+    fi
+}
+
+verify_configuration() {
+    printf "${YELLOW}[INFO] Проверяем конфигурацию...${NC}\n"
+    
+    # Проверка конфигурации сети
+    printf "${CYAN}1. Проверка конфигурации сети:${NC}\n"
+    if uci show network.tailscale >/dev/null 2>&1; then
+        printf "${GREEN}[OK] Интерфейс tailscale в конфигурации сети${NC}\n"
+        uci show network.tailscale
+    else
+        printf "${RED}[ERROR] Интерфейс tailscale отсутствует в конфигурации сети${NC}\n"
+    fi
+    
+    # Проверка конфигурации фаервола
+    printf "${CYAN}2. Проверка конфигурации фаервола:${NC}\n"
+    if uci show firewall | grep -q "zone.*tailscale"; then
+        printf "${GREEN}[OK] Зона tailscale в конфигурации фаервола${NC}\n"
+        ZONE_CONFIG=$(uci show firewall | grep "zone.*tailscale" | cut -d'=' -f1 | cut -d'.' -f1-2)
+        uci show $ZONE_CONFIG
+    else
+        printf "${RED}[ERROR] Зона tailscale отсутствует в конфигурации фаервола${NC}\n"
+    fi
+    
+    # Проверка видимости в системе
+    printf "${CYAN}3. Проверка видимости в системе:${NC}\n"
+    if ubus list network.interface.tailscale >/dev/null 2>&1; then
+        printf "${GREEN}[OK] Интерфейс tailscale виден в системе${NC}\n"
+    else
+        printf "${YELLOW}[WARNING] Интерфейс tailscale может не отображаться в веб-интерфейсе${NC}\n"
+        printf "${YELLOW}Попробуйте перезагрузить устройство${NC}\n"
     fi
 }
 
@@ -171,12 +249,15 @@ setup_tailscale() {
         
         # Проверка tailscale0 интерфейса
         printf "${YELLOW}[INFO] Проверяем сетевой интерфейс...${NC}\n"
-        if ifconfig tailscale0 >/dev/null 2>&1; then
+        if ip link show tailscale0 >/dev/null 2>&1 || ifconfig tailscale0 >/dev/null 2>&1; then
             printf "${GREEN}[OK] Сетевой интерфейс tailscale0 создан${NC}\n"
             ifconfig tailscale0 | grep -E "(inet|RX|TX)"
         else
             printf "${RED}[ERROR] Сетевой интерфейс tailscale0 не найден${NC}\n"
         fi
+        
+        # Проверка конфигурации
+        verify_configuration
         
         # Возможные инструкции
         printf "${PURPLE}\n=== ИНСТРУКЦИЯ ===${NC}\n"
@@ -258,6 +339,10 @@ remove_tailscale() {
     rm -rf /etc/tailscale 2>/dev/null && printf "${GREEN}[OK] Удален /etc/tailscale${NC}\n"
     rm -rf /etc/config/tailscale 2>/dev/null && printf "${GREEN}[OK] Удален /etc/config/tailscale${NC}\n"
     rm -f /etc/init.d/tailscale 2>/dev/null && printf "${GREEN}[OK] Удален /etc/init.d/tailscale${NC}\n"
+
+    # Удаление интерфейса из конфигурации сети
+    printf "${YELLOW}[INFO] Удаляем интерфейс из конфигурации сети...${NC}\n"
+    uci delete network.tailscale 2>/dev/null && uci commit network && printf "${GREEN}[OK] Интерфейс tailscale удален из конфигурации сети${NC}\n"
 
     printf "\n${GREEN}[OK] Процесс удаления завершен${NC}\n"
 
