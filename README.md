@@ -1,5 +1,5 @@
 ### Установка (устарела)
-sh <(wget -O - https://raw.githubusercontent.com/Mehanik511/routerich_scripts/refs/heads/main/tailscale_install.sh)
+sh <(wget -O - https://github.com/yuliantrip/tailscale_diag/raw/refs/heads/main/tailscale_install.sh)
 
-### Диагностика
-sh <(wget -O - https://raw.githubusercontent.com/Mehanik511/routerich_scripts/refs/heads/main/tailscale_diagnostic.sh)
+### Диагностика для openwrt 24 и 25
+sh <(wget -O - https://github.com/yuliantrip/tailscale_diag/raw/refs/heads/main/tailscale_diagnostic.sh)

@@ -1,5 +1,5 @@
 #!/bin/sh
-# tailscale_diagnostic.sh - Диагностика настроек Tailscale на OpenWrt (opkg/apk)
+# tailscale_diagnostic.sh - Диагностика настроек Tailscale на OpenWrt
 
 # --- ЦВЕТА ---
 CLR_OFF="\033[0m"
@@ -18,65 +18,25 @@ clear
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "Диагностика Tailscale запущена: $(date '+%Y-%m-%d %H:%M:%S')"
-printf "Лог сохраняется в: ${YELLOW}%s${CLR_OFF}\\n" "$LOG_FILE"
+printf "Лог сохраняется в: ${YELLOW}%s${CLR_OFF}\n" "$LOG_FILE"
 echo "--------------------------------------------------------------"
 
-# --- ОПРЕДЕЛЕНИЕ ПАКЕТНОГО МЕНЕДЖЕРА ---
-PKG_MGR=""
-if command -v opkg >/dev/null 2>&1; then
-    PKG_MGR="opkg"
-elif command -v apk >/dev/null 2>&1; then
-    PKG_MGR="apk"
-else
-    printf "${RED}ОШИБКА: Не найден ни opkg, ни apk. Это точно OpenWrt?${CLR_OFF}\\n"
-    exit 1
-fi
-
 # --- ПРОВЕРКА НАЛИЧИЯ TAILSCALE ---
-TS_INSTALLED=0
-case "$PKG_MGR" in
-    opkg)
-        if opkg list-installed 2>/dev/null | grep -q "^tailscale"; then
-            TS_INSTALLED=1
-        fi
-        ;;
-    apk)
-        # apk list --installed [P] аналог opkg list-installed [P][web:6]
-        if apk list --installed tailscale 2>/dev/null | grep -q "^tailscale"; then
-            TS_INSTALLED=1
-        fi
-        ;;
-esac
-
-if [ "$TS_INSTALLED" -ne 1 ]; then
-    printf "${RED}ОШИБКА: Tailscale не установлен (pkgmgr=%s)!${CLR_OFF}\\n" "$PKG_MGR"
+if ! opkg list-installed | grep -q "^tailscale"; then
+    printf "${RED}ОШИБКА: Tailscale не установлен!${CLR_OFF}\n"
     exit 1
 fi
 
 TS_CONFIG="/etc/config/tailscale"
 if [ ! -f "$TS_CONFIG" ]; then
-    printf "${RED}ОШИБКА: Файл конфигурации %s не найден!${CLR_OFF}\\n" "$TS_CONFIG"
+    printf "${RED}ОШИБКА: Файл конфигурации %s не найден!${CLR_OFF}\n" "$TS_CONFIG"
     exit 1
 fi
 
 # --- ПОЛУЧЕНИЕ ВЕРСИИ TAILSCALE ---
-TS_VERSION=""
-
-# сначала пробуем через сам бинарь
 TS_VERSION=$(tailscale version 2>/dev/null | head -n1 | awk '{print $1}')
-
 if [ -z "$TS_VERSION" ]; then
-    case "$PKG_MGR" in
-        opkg)
-            # opkg list-installed tailscale -> "tailscale - 1.70.0-1" и т.п.
-            TS_VERSION=$(opkg list-installed tailscale 2>/dev/null | awk '{print $3}')
-            ;;
-        apk)
-            # apk list --installed tailscale -> "tailscale-1.70.0-r0 installed"[web:6]
-            TS_VERSION=$(apk list --installed tailscale 2>/dev/null | \
-                awk -F'[- ]' '{print $(NF-1)}')
-            ;;
-    esac
+    TS_VERSION=$(opkg list-installed tailscale | awk '{print $3}')
 fi
 
 # Проверка статуса службы
@@ -89,8 +49,7 @@ else
 fi
 
 # Проверка автозапуска
-#if [ -f /etc/rc.d/S*tailscale ] || [ -L /etc/rc.d/S*tailscale ]; then
-if ls /etc/rc.d/S*tailscale >/dev/null 2>&1; then
+if [ -f /etc/rc.d/S*tailscale ] || [ -L /etc/rc.d/S*tailscale ]; then
     TS_AUTOSTART="${GREEN}РАЗРЕШЁН${CLR_OFF}"
 else
     TS_AUTOSTART="${YELLOW}ОТКЛЮЧЕН${CLR_OFF}"
@@ -116,14 +75,12 @@ else
 fi
 
 # 1.2) accept_dns (зависит от версии)
-#ACCEPT_DNS=$(uci -q get tailscale.settings.accept_dns)
-#EXPECTED_DNS="1"
-ACCEPT_DNS=$(uci -q get tailscale.settings.disable_magic_dns)
-EXPECTED_DNS="0"
+ACCEPT_DNS=$(uci -q get tailscale.settings.accept_dns)
+EXPECTED_DNS="1"
 
 if [ -n "$TS_VERSION" ]; then
     TS_VER_NUM=$(echo "$TS_VERSION" | sed 's/[^0-9.]//g')
-
+    
     # Проверяем версию >= 1.92.5
     if [ "$(printf '%s\n' "$TS_VER_NUM" "1.92.5" | sort -V | tail -n1)" = "$TS_VER_NUM" ] && \
        [ "$TS_VER_NUM" != "1.92.4" ]; then
@@ -208,16 +165,16 @@ echo "3. ПРОВЕРКА EXIT NODE:"
 EXIT_NODE=$(uci -q get tailscale.settings.advertise_exit_node)
 if [ "$EXIT_NODE" = "1" ]; then
     printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | ${GREEN}включен${CLR_OFF} [%s]\n" "advertise_exit_node" "галочка \"Узел выхода\""
-
+    
     # 3.2) advertise_routes с проверкой подсети
     ADVERTISED_ROUTES=$(uci -q get tailscale.settings.advertise_routes)
-
+    
     if [ -z "$ADVERTISED_ROUTES" ]; then
         printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | ${RED}не указаны${CLR_OFF} [%s]\n" "advertise_routes" "галочка \"Узел выхода\""
     else
         # Получаем подсеть роутера
         ROUTER_SUBNET=$(ip -4 route show dev br-lan 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' | head -n1)
-
+        
         if [ -n "$ROUTER_SUBNET" ]; then
             # Сравниваем
             if echo "$ADVERTISED_ROUTES" | grep -qF "$ROUTER_SUBNET"; then
@@ -238,30 +195,30 @@ fi
 # 3.3) Проверка zeroblock и podkop (интерфейсы)
 # 3.3.1) zeroblock
 if [ -f "/etc/init.d/zeroblock" ]; then
-    ZB_INT=$(uci -q get zeroblock.settings.source_network_interfaces | sed "s/'//g" | tr ' ' ',')
-    ZB_STATUS=$(/etc/init.d/zeroblock status 2>&1)
-    if [ "$EXIT_NODE" = "1" ]; then
-        if echo "$ZB_INT" | grep -q "tailscale0"; then
+	ZB_INT=$(uci -q get zeroblock.settings.source_network_interfaces | sed "s/'//g" | tr ' ' ',')
+	ZB_STATUS=$(/etc/init.d/zeroblock status 2>&1)
+	if [ "$EXIT_NODE" = "1" ]; then
+		if echo "$ZB_INT" | grep -q "tailscale0"; then
 			printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | интерфейсы ${CYAN}%s${CLR_OFF} [%s]\n" "zeroblock ($ZB_STATUS)" "$ZB_INT" "настройка \"Входящие интерфейсы\""
-        else
+		else
 			printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | интерфейсы ${RED}%s${CLR_OFF} [%s]\n" "zeroblock ($ZB_STATUS)" "$ZB_INT" "настройка \"Входящие интерфейсы\""
 			printf "         ${YELLOW}Для работы exit node интерфейс tailscale0 должен быть выбран в настройках %s${CLR_OFF}\n" "zeroblock"
-        fi
-    fi
+		fi
+	fi
 fi
 
 # 3.3.2) podkop
 if [ -f "/etc/init.d/podkop" ]; then
     PK_INT=$(uci -q get podkop.settings.source_network_interfaces | sed "s/'//g" | tr ' ' ',')
     PK_STATUS=$(/etc/init.d/podkop status 2>&1)
-    if [ "$EXIT_NODE" = "1" ]; then
-        if echo "$PK_INT" | grep -q "tailscale0"; then
+	if [ "$EXIT_NODE" = "1" ]; then
+		if echo "$PK_INT" | grep -q "tailscale0"; then
 			printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | интерфейсы ${CYAN}%s${CLR_OFF} [%s]\n" "podkop ($PK_STATUS)" "$PK_INT" "настройка \"Интерфейс источника\""
-        else
+		else
 			printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | интерфейсы ${RED}%s${CLR_OFF} [%s]\n" "podkop ($PK_STATUS)" "$PK_INT" "настройка \"Интерфейс источника\""
 			printf "         ${YELLOW}Для работы exit node интерфейс tailscale0 должен быть выбран в настройках %s${CLR_OFF}\n" "podkop"
-        fi
-    fi
+		fi
+	fi
 fi
 
 echo ""
@@ -270,18 +227,18 @@ echo "= СТАТУС ПОДКЛЮЧЕНИЯ:"
 # Проверка статуса через tailscale
 if [ "$TS_RUNNING" = "1" ]; then
     TS_STATUS_OUTPUT=$(tailscale status 2>/dev/null)
-
+    
     if [ $? -eq 0 ] && [ -n "$TS_STATUS_OUTPUT" ]; then
         printf "  ${GREEN}[OK]${CLR_OFF}   Tailscale: ${GREEN}подключен${CLR_OFF}\n"
-
+        
         # IP адреса Tailscale
         TS_IP4=$(tailscale ip -4 2>/dev/null)
         TS_IP6=$(tailscale ip -6 2>/dev/null)
-
+        
         if [ -n "$TS_IP4" ]; then
             printf "  IPv4: %s\n" "$TS_IP4"
         fi
-
+        
         if [ -n "$TS_IP6" ]; then
             printf "  IPv6: %s\n" "$TS_IP6"
         fi
@@ -307,13 +264,12 @@ FW_RULES_ALL=$(uci show firewall 2>/dev/null | grep -i tailscale)
 
 if [ -n "$FW_RULES_ALL" ]; then
     # Фильтруем стандартные правила
-    FW_RULES_CUSTOM=$(echo "$FW_RULES_ALL" | \
-        grep -v "firewall.tszone.name='tailscale'" | \
-        grep -v "firewall.tszone.device='tailscale+'" | \
-        grep -v "firewall.ts_ac_lan.src='tailscale'" | \
-        grep -v "firewall.ts_ac_wan.src='tailscale'" | \
-        grep -v "firewall.lan_ac_ts.dest='tailscale'")
-
+    FW_RULES_CUSTOM=$(echo "$FW_RULES_ALL" | grep -v "firewall.tszone.name='tailscale'" | \
+                      grep -v "firewall.tszone.device='tailscale+'" | \
+                      grep -v "firewall.ts_ac_lan.src='tailscale'" | \
+                      grep -v "firewall.ts_ac_wan.src='tailscale'" | \
+                      grep -v "firewall.lan_ac_ts.dest='tailscale'")
+    
     if [ -n "$FW_RULES_CUSTOM" ]; then
         printf "  ${GREEN}[ИНФО]${CLR_OFF} Найдены кастомные правила firewall для Tailscale:\n"
         echo "$FW_RULES_CUSTOM" | while read -r rule; do
