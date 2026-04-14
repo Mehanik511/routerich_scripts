@@ -117,6 +117,13 @@ if [ -n "$HOSTNAME" ]; then
     fi
 fi
 
+# 1.5) auth-key
+AUTHKEY=$(uci -q get tailscale.settings.authkey)
+if [ -n "$AUTHKEY" ]; then
+    printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | ${RED}%s${CLR_OFF} [%s]\n" "authkey" "Введён ключ!" "поле \"Ключ авторизации\""
+        printf "         ${YELLOW}Поле необходимо оставить пустым!${CLR_OFF}\n"
+fi
+
 echo ""
 echo "2. ОПЦИОНАЛЬНЫЕ ПАРАМЕТРЫ:"
 
