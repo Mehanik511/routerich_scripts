@@ -202,13 +202,34 @@ fi
 # 3.3) Проверка zeroblock и podkop (интерфейсы)
 # 3.3.1) zeroblock
 if [ -f "/etc/init.d/zeroblock" ]; then
-	ZB_INT=$(uci -q get zeroblock.settings.source_network_interfaces | sed "s/'//g" | tr ' ' ',')
+	# Определяем версию zeroblock (новые версии 0.8+ используют секцию engine)
+	ZB_USE_ENGINE=0
+	ZB_VERSION=$(/etc/init.d/zeroblock --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -n1)
+	if [ -n "$ZB_VERSION" ]; then
+		ZB_MAJOR=${ZB_VERSION%%.*}   # всё до первой точки
+		ZB_MINOR=${ZB_VERSION#*.}     # всё после первой точки
+		# Для версий 0.8+ или 1.x используем engine, для 0.1-0.7 оставляем settings
+		if { [ "$ZB_MAJOR" -eq 0 ] && [ "$ZB_MINOR" -ge 8 ]; } || [ "$ZB_MAJOR" -ge 1 ]; then
+			ZB_USE_ENGINE=1
+		fi
+	fi
+
+	# Получаем список интерфейсов из соответствующей секции (с fallback)
+	# Если не удалось определить версию, пытаемся engine (как более вероятный для новых)
+	# иначе если settings пуст – тоже engine
+	if [ "$ZB_USE_ENGINE" -eq 1 ] || ! uci -q get zeroblock.settings.source_network_interfaces >/dev/null; then
+		ZB_INT=$(uci -q get zeroblock.engine.source_network_interfaces 2>/dev/null | sed "s/'//g" | tr ' ' ',')
+	else
+		ZB_INT=$(uci -q get zeroblock.settings.source_network_interfaces | sed "s/'//g" | tr ' ' ',')
+	fi
+
+	# --- Проверка статуса и вывод ---
 	ZB_STATUS=$(/etc/init.d/zeroblock status 2>&1)
 	if [ "$EXIT_NODE" = "1" ]; then
 		if echo "$ZB_INT" | grep -q "tailscale0"; then
-			printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | интерфейсы ${CYAN}%s${CLR_OFF} [%s]\n" "zeroblock ($ZB_STATUS)" "$ZB_INT" "настройка \"Входящие интерфейсы\""
+			printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | интерфейсы ${CYAN}%s${CLR_OFF} [%s]\n" "zeroblock ($ZB_STATUS)" "$ZB_INT" "настройка \"Входящие интерфейсы/устройства\""
 		else
-			printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | интерфейсы ${RED}%s${CLR_OFF} [%s]\n" "zeroblock ($ZB_STATUS)" "$ZB_INT" "настройка \"Входящие интерфейсы\""
+			printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | интерфейсы ${RED}%s${CLR_OFF} [%s]\n" "zeroblock ($ZB_STATUS)" "$ZB_INT" "настройка \"Входящие интерфейсы/устройства\""
 			printf "         ${YELLOW}Для работы exit node интерфейс tailscale0 должен быть выбран в настройках %s${CLR_OFF}\n" "zeroblock"
 		fi
 	fi
