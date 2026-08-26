@@ -74,21 +74,43 @@ else
     printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | ${RED}%s${CLR_OFF} (должно быть 1) [%s]\n" "enabled" "$ENABLED" "галочка \"Включить\""
 fi
 
-# 1.2) accept_dns (зависит от версии)
+# 1.2) accept_dns / dns_mode (зависит от версии)
 ACCEPT_DNS=$(uci -q get tailscale.settings.accept_dns)
 EXPECTED_DNS="1"
+TS_VER_GE_1_92_5=0
+TS_VER_GE_1_102=0
 
 if [ -n "$TS_VERSION" ]; then
     TS_VER_NUM=$(echo "$TS_VERSION" | sed 's/[^0-9.]//g')
-    
+
     # Проверяем версию >= 1.92.5
     if [ "$(printf '%s\n' "$TS_VER_NUM" "1.92.5" | sort -V | tail -n1)" = "$TS_VER_NUM" ] && \
        [ "$TS_VER_NUM" != "1.92.4" ]; then
-        EXPECTED_DNS="0"
+        TS_VER_GE_1_92_5=1
+    fi
+
+    # С версии 1.102.0 accept_dns заменён на dns_mode (UI: "DNS Mode")
+    if [ "$(printf '%s\n' "$TS_VER_NUM" "1.102.0" | sort -V | tail -n1)" = "$TS_VER_NUM" ]; then
+        TS_VER_GE_1_102=1
     fi
 fi
 
-if [ "$ACCEPT_DNS" = "$EXPECTED_DNS" ]; then
+# С версии 1.92.5 ожидаемое значение accept_dns изменилось на 0
+if [ "$TS_VER_GE_1_92_5" = "1" ]; then
+    EXPECTED_DNS="0"
+fi
+
+if [ "$TS_VER_GE_1_102" = "1" ]; then
+    # Новая схема: dns_mode = disabled | magicdns | dnsmasq. Валиден только disabled
+    DNS_MODE=$(uci -q get tailscale.settings.dns_mode)
+    if [ "$DNS_MODE" = "disabled" ]; then
+        printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | ${GREEN}%s${CLR_OFF} [%s]\n" "dns_mode" "$DNS_MODE" "настройка \"DNS Mode\""
+    elif [ -z "$DNS_MODE" ]; then
+        printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | ${RED}НЕ НАЙДЕН${CLR_OFF} (должно быть %s) [%s]\n" "dns_mode" "disabled" "настройка \"DNS Mode\""
+    else
+        printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | ${RED}%s${CLR_OFF} (должно быть %s) [%s]\n" "dns_mode" "$DNS_MODE" "disabled" "настройка \"DNS Mode\""
+    fi
+elif [ "$ACCEPT_DNS" = "$EXPECTED_DNS" ]; then
     printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | ${GREEN}%s${CLR_OFF} [%s]\n" "accept_dns" "$ACCEPT_DNS" "галочка \"Принимать DNS\""
 elif [ -z "$ACCEPT_DNS" ]; then
     printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | ${RED}НЕ НАЙДЕН${CLR_OFF} (должно быть %s) [%s]\n" "accept_dns" "$EXPECTED_DNS" "галочка \"Принимать DNS\""
@@ -157,7 +179,18 @@ fi
 
 # 2.4) disable_snat_subnet_routes
 SNAT=$(uci -q get tailscale.settings.disable_snat_subnet_routes)
-if [ "$SNAT" = "0" ]; then
+# С версии 1.102.0 при включённом exit node значение должно быть 0,
+# иначе веб-интерфейс роутера сообщает о неверных настройках
+EXIT_NODE=$(uci -q get tailscale.settings.advertise_exit_node)
+if [ "$TS_VER_GE_1_102" = "1" ] && [ "$EXIT_NODE" = "1" ]; then
+    if [ "$SNAT" = "1" ]; then
+        printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | ${RED}SNAT выключен${CLR_OFF} (должно быть 0 при включённом узле выхода) [%s]\n" "disable_snat_subnet_routes" "CLI флаг"
+    elif [ -z "$SNAT" ]; then
+        printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | ${GREEN}не установлен (= 0, SNAT включен)${CLR_OFF} [%s]\n" "disable_snat_subnet_routes" "CLI флаг"
+    else
+        printf "  ${GREEN}[OK]${CLR_OFF}   %-30s | ${GREEN}SNAT включен${CLR_OFF} [%s]\n" "disable_snat_subnet_routes" "CLI флаг"
+    fi
+elif [ "$SNAT" = "0" ]; then
     printf "  ${GREEN}[ИНФО]${CLR_OFF} %-30s | ${GREEN}SNAT включен${CLR_OFF} [%s]\n" "disable_snat_subnet_routes" "CLI флаг"
 elif [ "$SNAT" = "1" ]; then
     printf "  ${YELLOW}[ИНФО]${CLR_OFF} %-30s | ${YELLOW}SNAT выключен${CLR_OFF} [%s]\n" "disable_snat_subnet_routes" "CLI флаг"
