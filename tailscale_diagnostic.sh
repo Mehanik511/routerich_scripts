@@ -36,7 +36,35 @@ fi
 # --- ПОЛУЧЕНИЕ ВЕРСИИ TAILSCALE ---
 TS_VERSION=$(tailscale version 2>/dev/null | head -n1 | awk '{print $1}')
 if [ -z "$TS_VERSION" ]; then
-    TS_VERSION=$(opkg list-installed tailscale | awk '{print $3}')
+    TS_VERSION=$(opkg list-installed | grep -E "^tailscale(-lite)? " | awk '{print $3}' | head -n1)
+fi
+
+# --- ПОЛУЧЕНИЕ ВЕРСИИ LUCI-APP-TAILSCALE ---
+# Схему параметров в /etc/config/tailscale задаёт веб-интерфейс, а не служба
+LUCI_VERSION=$(opkg list-installed luci-app-tailscale 2>/dev/null | awk '{print $3}')
+# Ревизию пакета (-r1) и суффиксы сборки отбрасываем: без этого дефис пропадает
+# и версия склеивается (1.2.5-r1 -> 1.2.51, что "больше" 1.2.7)
+LUCI_VER_NUM=$(echo "$LUCI_VERSION" | sed 's/-.*//; s/[^0-9.]//g')
+TS_VER_NUM=$(echo "$TS_VERSION" | sed 's/-.*//; s/[^0-9.]//g')
+
+# accept_dns заменён на dns_mode (UI: "DNS Mode") в службе с 1.102.0,
+# в веб-интерфейсе — с 1.2.7 (у пакета LuCI собственная нумерация)
+TS_VER_GE_1_102=0
+LUCI_VER_GE_1_2_7=0
+if [ -n "$TS_VER_NUM" ] && \
+   [ "$(printf '%s\n' "$TS_VER_NUM" "1.102.0" | sort -V | tail -n1)" = "$TS_VER_NUM" ]; then
+    TS_VER_GE_1_102=1
+fi
+if [ -n "$LUCI_VER_NUM" ] && \
+   [ "$(printf '%s\n' "$LUCI_VER_NUM" "1.2.7" | sort -V | tail -n1)" = "$LUCI_VER_NUM" ]; then
+    LUCI_VER_GE_1_2_7=1
+fi
+
+# Служба и веб-интерфейс должны быть по одну сторону порога
+TS_LUCI_VER_MATCH=1
+if [ -n "$TS_VER_NUM" ] && [ -n "$LUCI_VER_NUM" ] && \
+   [ "$TS_VER_GE_1_102" != "$LUCI_VER_GE_1_2_7" ]; then
+    TS_LUCI_VER_MATCH=0
 fi
 
 # Проверка статуса службы
@@ -59,6 +87,20 @@ echo ""
 printf "= ИНФОРМАЦИЯ О TAILSCALE:\n"
 printf "  Версия: ${CYAN}%-15s${CLR_OFF} | Статус: %b | Автозапуск: %b\n" "${TS_VERSION:-UNKNOWN}" "$TS_STATUS" "$TS_AUTOSTART"
 
+if [ -z "$LUCI_VERSION" ]; then
+    LUCI_VER_STATUS="${YELLOW}не установлен${CLR_OFF}"
+elif [ "$TS_LUCI_VER_MATCH" = "0" ]; then
+    LUCI_VER_STATUS="${YELLOW}расхождение версий${CLR_OFF}"
+else
+    LUCI_VER_STATUS="${GREEN}совместим со службой${CLR_OFF}"
+fi
+printf "  LuCI:   ${CYAN}%-15s${CLR_OFF} | Версии: %b\n" "${LUCI_VERSION:-UNKNOWN}" "$LUCI_VER_STATUS"
+
+if [ "$TS_LUCI_VER_MATCH" = "0" ]; then
+    printf "  ${YELLOW}[ИНФО]${CLR_OFF} Расхождение версий службы и веб-интерфейса: набор настроек может отличаться.\n"
+    printf "         ${YELLOW}Обновите оба пакета до последней версии.${CLR_OFF}\n"
+fi
+
 echo ""
 echo "= АНАЛИЗ КОНФИГУРАЦИИ /etc/config/tailscale:"
 echo ""
@@ -78,21 +120,20 @@ fi
 ACCEPT_DNS=$(uci -q get tailscale.settings.accept_dns)
 EXPECTED_DNS="1"
 TS_VER_GE_1_92_5=0
-TS_VER_GE_1_102=0
 
-if [ -n "$TS_VERSION" ]; then
-    TS_VER_NUM=$(echo "$TS_VERSION" | sed 's/[^0-9.]//g')
+# Проверяем версию службы >= 1.92.5
+if [ -n "$TS_VER_NUM" ] && \
+   [ "$(printf '%s\n' "$TS_VER_NUM" "1.92.5" | sort -V | tail -n1)" = "$TS_VER_NUM" ] && \
+   [ "$TS_VER_NUM" != "1.92.4" ]; then
+    TS_VER_GE_1_92_5=1
+fi
 
-    # Проверяем версию >= 1.92.5
-    if [ "$(printf '%s\n' "$TS_VER_NUM" "1.92.5" | sort -V | tail -n1)" = "$TS_VER_NUM" ] && \
-       [ "$TS_VER_NUM" != "1.92.4" ]; then
-        TS_VER_GE_1_92_5=1
-    fi
-
-    # С версии 1.102.0 accept_dns заменён на dns_mode (UI: "DNS Mode")
-    if [ "$(printf '%s\n' "$TS_VER_NUM" "1.102.0" | sort -V | tail -n1)" = "$TS_VER_NUM" ]; then
-        TS_VER_GE_1_102=1
-    fi
+# Какой параметр реально лежит в конфиге, определяет тот, кто его пишет:
+# веб-интерфейс, а при его отсутствии — версия службы
+if [ -n "$LUCI_VER_NUM" ]; then
+    CFG_USE_DNS_MODE="$LUCI_VER_GE_1_2_7"
+else
+    CFG_USE_DNS_MODE="$TS_VER_GE_1_102"
 fi
 
 # С версии 1.92.5 ожидаемое значение accept_dns изменилось на 0
@@ -100,7 +141,7 @@ if [ "$TS_VER_GE_1_92_5" = "1" ]; then
     EXPECTED_DNS="0"
 fi
 
-if [ "$TS_VER_GE_1_102" = "1" ]; then
+if [ "$CFG_USE_DNS_MODE" = "1" ]; then
     # Новая схема: dns_mode = disabled | magicdns | dnsmasq. Валиден только disabled
     DNS_MODE=$(uci -q get tailscale.settings.dns_mode)
     if [ "$DNS_MODE" = "disabled" ]; then
@@ -182,7 +223,7 @@ SNAT=$(uci -q get tailscale.settings.disable_snat_subnet_routes)
 # С версии 1.102.0 при включённом exit node значение должно быть 0,
 # иначе веб-интерфейс роутера сообщает о неверных настройках
 EXIT_NODE=$(uci -q get tailscale.settings.advertise_exit_node)
-if [ "$TS_VER_GE_1_102" = "1" ] && [ "$EXIT_NODE" = "1" ]; then
+if [ "$CFG_USE_DNS_MODE" = "1" ] && [ "$EXIT_NODE" = "1" ]; then
     if [ "$SNAT" = "1" ]; then
         printf "  ${RED}[КРИТ]${CLR_OFF} %-30s | ${RED}SNAT выключен${CLR_OFF} (должно быть 0 при включённом узле выхода) [%s]\n" "disable_snat_subnet_routes" "CLI флаг"
     elif [ -z "$SNAT" ]; then
